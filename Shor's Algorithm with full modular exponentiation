@@ -1,0 +1,566 @@
+#https://quantumcomputing.stackexchange.com/questions/6842/is-there-a-simple-formulaic-way-to-construct-a-modular-exponentiation-circuit
+#https://qiskit.org/textbook/ch-states/atoms-computation.html
+#https://qiskit.org/textbook/ch-algorithms/shor.html
+
+from warnings import simplefilter
+simplefilter(action='ignore', category=DeprecationWarning)
+
+from qiskit import QuantumCircuit, QuantumRegister, ClassicalRegister, Aer, execute
+#from qiskit.visualization import plot_histogram
+import numpy as np
+#from matplotlib import pyplot as plt
+from qiskit.circuit.library import XGate as XGate
+from qiskit.circuit.library import MCMT as mcmt
+import time
+
+#sim = Aer.get_backend('qasm_simulator')
+#sim = Aer.get_backend('statevector_simulator')
+
+#https://rosettacode.org/wiki/Modular_inverse#Python
+# same as pow(a, -1, N)
+def extended_gcd(aa, bb):
+    lastremainder, remainder = abs(aa), abs(bb)
+    x, lastx, y, lasty = 0, 1, 1, 0
+    while remainder:
+        lastremainder, (quotient, remainder) = remainder, divmod(lastremainder, remainder)
+        x, lastx = lastx - quotient*x, x
+        y, lasty = lasty - quotient*y, y
+    return lastremainder, lastx * (-1 if aa < 0 else 1), lasty * (-1 if bb < 0 else 1)
+ 
+def modinv(a, m):
+	g, x, y = extended_gcd(a, m)
+	if g != 1:
+		raise ValueError
+	return x % m
+
+def a2jmodN(a, j, N): 
+    for i in range(j):
+        a = np.mod(a**2, N)
+    return a
+
+def carry_gate(inverse):
+    U = QuantumCircuit(4)
+    U.ccx(1, 2, 3)
+    U.cx(1, 2)
+    U.ccx(0, 2, 3)
+    if inverse == True:
+        U = U.inverse()
+        U.name = "carry†"
+        U = U.to_instruction()
+    if inverse == False:
+        U.name = "carry"
+        U = U.to_instruction()
+    return U
+
+
+def sum_gate(inverse):
+    U = QuantumCircuit(3)
+    U.cx(1, 2)
+    U.cx(0, 2)
+    if inverse == True:
+        U = U.inverse()
+        U.name = "sum†"
+        U = U.to_instruction()
+    if inverse == False:
+        U.name = "sum"
+        U = U.to_instruction()
+    return U
+
+
+def x_write_num(circuit, num, target):    
+    j=0
+    for i in bin(num)[2:][::-1]: 
+        if i=='1':
+            circuit.x(target[j])
+        j+=1
+        
+def cx_write_num(circuit, num, control1, target):    
+    j=0
+    for i in bin(num)[2:][::-1]: 
+        if i=='1':
+            circuit.cx(control1, target[j])
+        j+=1
+
+def ccx_write_num(circuit, num, control1, control2, target):    
+    j=0
+    for i in bin(num)[2:][::-1]: 
+        if i=='1':
+            circuit.ccx(control1, control2, target[j])
+        j+=1
+            
+def cccx_write_num(circuit, num, control0, control1, control2, target):    
+    mult = mcmt(XGate(), 3, 1)
+    j=0
+    for i in bin(num)[2:][::-1]: 
+        if i=='1':
+            circuit.append(mult, [control0[:]] + [control1[0]] + [control2[:]] + [target[j]])
+        j+=1
+        
+        
+""" test multi-control multi-target gate
+mult = mcmt(XGate(), 3, 1)
+q0 = QuantumRegister(1)
+q1 = QuantumRegister(1)
+q2 = QuantumRegister(1)
+q3 = QuantumRegister(1)
+q4 = QuantumRegister(1)
+q5 = QuantumRegister(1)
+tc = QuantumCircuit(q0, q1, q2, q3, q4, q5)        
+tc.append(mult, q0[:] + q1[:] + q2[:] + q3[:])
+tc.draw()     
+"""   
+        
+
+def ADDER(inverse):
+    U = QuantumCircuit()
+    for element in ADDER_LIST:
+        for register in element:
+            U.add_register(register)
+    
+    for i in range(n_a-1):
+        U.append(carry_gate(False), [qr_c[i], qr_a[i], qr_b[i], qr_c[i+1]])
+   
+    U.append(carry_gate(False), [qr_c[n_c-1], qr_a[n_a-1], qr_b[n_b-2], qr_b[n_b-1]])
+
+    
+    U.cx(qr_a[n_a-1], qr_b[n_b-2])
+    U.append(sum_gate(False), [qr_c[n_c-1], qr_a[n_a-1], qr_b[n_b-2]])
+    U.draw()
+    
+    for i in range(n_a-1, 0, -1):
+        U.append(carry_gate(True), [qr_c[i-1], qr_a[i-1], qr_b[i-1], qr_c[i]])
+        U.append(sum_gate(False), [qr_c[i-1], qr_a[i-1], qr_b[i-1]])
+
+    if inverse == True:
+        U = U.inverse()
+        U.name = "ADDER†"
+        U = U.to_instruction()
+    if inverse == False:
+        U.name = "ADDER"
+        U = U.to_instruction()
+    return U
+
+
+def ADDER_MOD(N, inverse):
+    #n_classical = 4
+    #c = ClassicalRegister(n_classical, name='c')
+    
+    U = QuantumCircuit()
+    for element in ADDER_MOD_LIST:
+        for register in element:
+            U.add_register(register)
+    #U.add_register(c)
+    
+    #U.x(qr_a[1]) # a = 2 
+    #U.x(qr_b[1]) # b = 2
+    #U.x(qr_n[0]) # N = 5
+    #U.x(qr_n[2]) # N = 5
+
+    U.append(ADDER(False), qr_a + qr_b + qr_c)
+
+    # Swap a and N register
+    for i in range(n_a):
+        U.swap(qr_a[i], qr_n[i])
+            
+    U.append(ADDER(True), qr_a + qr_b + qr_c)
+            
+    U.x(qr_b[n_b-1])
+    U.cx(qr_b[n_b-1], qr_t[n_t-1])
+    U.x(qr_b[n_b-1])
+
+    # Write N (the modulo) to a-register, order of cx-gates not relevant
+    cx_write_num(U, N, qr_t[n_t-1], qr_a)
+
+    U.append(ADDER(False), qr_a + qr_b + qr_c)
+
+    # Reverse Write N (modula) to a-register, order not relevant
+    cx_write_num(U, N, qr_t[n_t-1], qr_a)
+
+    # Swap a and N register
+    # Swap a and N register
+    for i in range(n_a):
+        U.swap(qr_a[i], qr_n[i])
+    
+    
+    U.append(ADDER(True), qr_a + qr_b + qr_c)
+       
+    U.cx(qr_b[n_b-1], qr_t[n_t-1])
+    
+    U.append(ADDER(False), qr_a + qr_b + qr_c)
+    
+    # measure b
+    #U.measure(qr_b[0], c[0])
+    #U.measure(qr_b[1], c[1])
+    #U.measure(qr_b[2], c[2])
+    #U.measure(qr_b[3], c[3])
+       
+    #counts = execute(U, backend=sim, shots=1000).result().get_counts(U)
+    #print(counts)
+    #print(2 + 2 % 5)
+    
+    
+    if inverse == True:
+        U = U.inverse()
+        U.name = "ADDER_MOD†"
+        U = U.to_instruction()
+    if inverse == False:
+        U.name = "ADDER_MOD"
+        U = U.to_instruction()
+    
+    return U
+        
+
+def Ctrl_MULT_MOD(N, m, inverse):  
+    # Test
+    #z = 2
+    #m = 3
+    #N = 5
+    #control_qubit = qr_c_x[0]
+    
+    #n_classical = 4
+    #c = ClassicalRegister(n_classical, name='c')
+    
+    U = QuantumCircuit()
+    for element in Ctrl_ADDER_MOD_LIST:
+        for register in element:
+            U.add_register(register)
+    #U.add_register(c)
+    
+    # need to activate c_x
+    #U.x(qr_c_x[0]) # c_x = 1 (conrol)
+    #U.x(qr_z[1]) # z = 2
+    
+    #U.x(qr_n[0]) # N = 5
+    #U.x(qr_n[2]) # N = 5
+    
+    
+     
+    for j in range(n_a):
+        # writes m * 2**j mod N to the a register
+        res = m * 2**j % N  
+        cccx_write_num(U, res, qr_c_exp[0], qr_c_x[0], qr_z[j], qr_a)
+        
+        U.append(ADDER_MOD(N, False), qr_a + qr_b + qr_c + qr_n + qr_t)
+        
+        # writes m * 2**j mod N to the a register
+        res = m * 2**j % N  
+        cccx_write_num(U, res, qr_c_exp[0], qr_c_x[0], qr_z[j], qr_a)
+    
+    U.x(qr_c_x[0])
+    
+    mult = mcmt(XGate(), 3, 1)
+    for i in range(n_z):
+        U.append(mult, [qr_c_exp[0]] + [qr_c_x[0]] + [qr_z[i]] + [qr_b[i]])
+        #U.cccx(qr_c_x[0], qr_c_x[0], qr_z[i], qr_b[i])
+
+    U.x(qr_c_x[0])
+    
+    # measure b
+    #U.measure(qr_b[0], c[0])
+    #U.measure(qr_b[1], c[1])
+    #U.measure(qr_b[2], c[2])
+    #U.measure(qr_b[3], c[3])
+       
+    #counts = execute(U, backend=sim, shots=1000).result().get_counts(U)
+    #print('quantum result: ', int('0b'+list(counts.keys())[0], 2))
+    #print(z * m % N)
+    
+
+    if inverse == True:
+        U = U.inverse()
+        U.name = "Ctrl_MULT_MOD†"
+        U = U.to_instruction()
+    if inverse == False:
+        U.name = "Ctrl_MULT_MOD"
+        U = U.to_instruction()
+    return U
+
+
+
+def CSWAP(inverse):
+    U = QuantumCircuit(3)
+    
+    U.ccx(0,1,2)
+    U.ccx(0,2,1)
+    U.ccx(0,1,2)
+    
+    if inverse == True:
+        U.inverse()
+        U.name = "CSWAP†"
+    if inverse == False:
+        U.name = "CSWAP"
+    U = U.to_instruction()
+    return U
+
+def CCCSWAP(inverse):
+    U = QuantumCircuit(4)
+    mult = mcmt(XGate(), 3, 1)
+    
+    U.append(mult, [0,1,2,3])
+    U.append(mult, [0,1,3,2])
+    U.append(mult, [0,1,2,3])
+    
+    U.decompose().draw()
+    
+    if inverse == True:
+        U.inverse()
+        U.name = "CSWAP†"
+    if inverse == False:
+        U.name = "CSWAP"
+    U = U.to_instruction()
+    return U
+
+
+def Ctrl_MODULAR_EXPONENTIATION(N, y, x, z):
+    # Test
+    #N = 5
+    #y = 3 
+    
+    #n_classical = 3
+    #c = ClassicalRegister(n_classical, name='c')
+    
+    U = QuantumCircuit()
+    for element in Ctrl_MODULAR_EXPONENTIATION_LIST:
+        for register in element:
+            U.add_register(register)
+    #U.add_register(c)
+    
+    x_write_num(U, x, qr_x)
+    x_write_num(U, z, qr_z)
+    
+    # x = 6
+    #U.x(qr_x[0])
+    #U.x(qr_x[1])
+    #U.x(qr_x[2])
+    
+    # z = 1
+    #U.x(qr_z[0]) # z = 1 (start value)
+   
+    # N = 5
+    #U.x(qr_n[0]) # N = 5
+    #U.x(qr_n[1]) # N = 5
+    #U.x(qr_n[2]) # N = 5
+    
+    for j in range(n_z):
+        m = a2jmodN(y, j, N)
+        # https://qiskit.org/documentation/stubs/qiskit.circuit.ControlledGate.html
+        U.append(Ctrl_MULT_MOD(N, m, False), qr_c_exp + [qr_x[j]] + qr_z + qr_a + qr_b + qr_c + qr_n + qr_t)
+                        
+    
+        for i in range(n_z):
+            #U.append(CSWAP(False), [qr_x[j], qr_z[i], qr_b[i]])
+            U.append(CCCSWAP(False), [qr_c_exp[0], qr_x[j], qr_z[i], qr_b[i]])
+        
+    
+        m = modinv(y**(2**j), N)
+        U.append(Ctrl_MULT_MOD(N, m, True), qr_c_exp + [qr_x[j]] + qr_z + qr_a + qr_b + qr_c + qr_n + qr_t)
+    
+    # measure z
+    #U.measure(qr_z[0], c[0])
+    #U.measure(qr_z[1], c[1])
+    #U.measure(qr_z[2], c[2])
+       
+    #counts = execute(U, backend=sim, shots=1000).result().get_counts(U)
+    #print('quantum result: ', int('0b'+list(counts.keys())[0], 2))
+    #print(y**x % N)
+    
+    U = U.to_instruction()
+    U.name = "MODULAR_EXPONENTIATION"
+    U.name = "%i^%i mod %i" % (y, x, N)
+    #c_U = U.control()
+    return U
+
+
+
+#https://qiskit.org/textbook/ch-algorithms/shor.html
+def qft_dagger(n):
+    """n-qubit QFTdagger the first n qubits in circ"""
+    qc = QuantumCircuit(n)
+    # Don't forget the Swaps!
+    for qubit in range(n//2):
+        qc.swap(qubit, n-qubit-1)
+    for j in range(n):
+        for m in range(j):
+            qc.cp(-np.pi/float(2**(j-m)), m, j)
+        qc.h(j)
+    qc.name = "QFT†"
+    return qc
+
+
+start_time = time.time()
+
+# To determine size of circuit
+N = 15
+y = 7
+z = 1  # just to set start value
+x = 128  # max value necessary
+
+# Determine the minimum size of the registers
+max_num = max(N, y, x) 
+max_num_qubits = len(bin(max_num)[2:])
+
+n_c_x = 1 # control qubit for ctrl_multi_mod
+n_c_exp = 1 # control qubit for modular exponentiation
+n_x = max_num_qubits
+n_z = max_num_qubits
+n_a = max_num_qubits
+n_b = max_num_qubits + 1
+n_c = max_num_qubits
+n_n = max_num_qubits
+n_t = 1
+n_shor = 8
+n_classical = max_num_qubits
+
+n = n_x + n_z + n_a + n_b + n_c + n_n + n_t
+
+c = ClassicalRegister(n_classical, name='c')
+
+qr_c_x = []
+for i in range(n_c_x):
+    qr_c_x.append(QuantumRegister(1, 'cx' + str(i)))
+    
+qr_c_exp = []
+for i in range(n_c_exp):
+    qr_c_exp.append(QuantumRegister(1, 'cexp' + str(i)))
+
+
+qr_x = []
+for i in range(n_x):
+    qr_x.append(QuantumRegister(1, 'x' + str(i)))
+
+qr_z = []
+for i in range(n_z):
+    qr_z.append(QuantumRegister(1, 'z' + str(i)))
+
+qr_a = []
+for i in range(n_a):
+    qr_a.append(QuantumRegister(1, 'a' + str(i)))
+
+qr_b = []
+for i in range(n_b):
+    qr_b.append(QuantumRegister(1, 'b' + str(i)))
+
+qr_c = []
+for i in range(n_c):
+    qr_c.append(QuantumRegister(1, 'c' + str(i)))
+
+qr_n = []
+for i in range(n_n):
+    qr_n.append(QuantumRegister(1, 'n' + str(i)))
+
+qr_t = []
+for i in range(n_t):
+    qr_t.append(QuantumRegister(1, 't' + str(i)))
+    
+qr_qft = []
+for i in range(n_shor):
+    qr_qft.append(QuantumRegister(1, 'shor' + str(i)))
+    
+
+full = [qr_c_x, qr_x, qr_z, qr_a, qr_b, qr_c, qr_n, qr_t]
+ADDER_LIST = [qr_a, qr_b, qr_c] 
+ADDER_MOD_LIST = [qr_a, qr_b, qr_c, qr_n, qr_t]
+Ctrl_ADDER_MOD_LIST = [qr_c_exp, qr_c_x, qr_z, qr_a, qr_b, qr_c, qr_n, qr_t]
+Ctrl_MODULAR_EXPONENTIATION_LIST = [qr_c_exp, qr_x, qr_z, qr_a, qr_b, qr_c, qr_n, qr_t]
+SHOR = [qr_qft, qr_x, qr_z, qr_a, qr_b, qr_c, qr_n, qr_t]
+
+
+qc = QuantumCircuit()
+for element in SHOR:
+    for register in element:
+        qc.add_register(register)
+qc.add_register(c)
+
+# Write values to register
+x_write_num(qc, N, qr_n)
+
+for i in range(n_shor):
+    qc.h(i)
+
+for q in range(n_shor):
+    x = 2**q
+    qc.append(Ctrl_MODULAR_EXPONENTIATION(N, y, x, z), [q] + qr_x + qr_z + qr_a + qr_b + qr_c + qr_n + qr_t)
+
+
+# Inverse QFT
+#qc.append(qft_dagger(n_shor), range(n_shor))
+
+qc.draw()
+
+# Measure circuit
+#qc.measure(range(n_shor), range(n_shor))
+#qc.draw(fold=-1)
+
+
+# measure z
+#qc.measure(qr_z[0], c[0])
+#qc.measure(qr_z[1], c[1])
+#qc.measure(qr_z[2], c[2])
+
+#sim = Aer.get_backend('qasm_simulator')
+#counts = execute(qc, backend=sim, shots=1000).result().get_counts(qc)
+#job = execute(qc, backend=Aer.get_backend('statevector_simulator')) # not faster compared to QASM simulator
+
+#counts = execute(U, backend=sim, shots=1000).result().get_counts(U)
+#print('quantum result: ', int('0b'+list(counts.keys())[0], 2))
+#print(y**x % N)
+
+#values = []
+#probabilities = []
+#for i, a in enumerate(job.result().get_statevector()):
+#     b = ('{0:0%sb}' % n).format(i) # loops through all combinations of n-qubits
+#     prob = np.abs(a)**2
+#     if prob==1:
+#         print(b, ": ", prob)
+#         print('z-register: ', int(b[3:6], 2)) 
+#         break
+#     #values += [b]
+#     #probabilities += [prob]   
+
+"""How to read a statevector
+'1010' read from right (lsb) to left (msb)
+is equivalent to reading the circuit from top to bottom
+Since we only want to read value of a particular z-register, we can extract that
+
+qc = QuantumCircuit(4)
+qc.x(1)
+qc.x(3)
+
+qc.draw()
+job = execute(qc, backend=Aer.get_backend('statevector_simulator'))
+
+values = []
+probabilities = []
+for i, a in enumerate(job.result().get_statevector()):
+     b = ('{0:0%sb}' % 4).format(i)
+     prob = np.abs(a)**2
+     if prob==1:
+         print(b, ": ", prob)
+         print('z-register: ', int(b[1:3], 2)) 
+         break
+     #values += [b]
+     #probabilities += [prob]   
+"""
+
+    
+#plt.bar(values, probabilities, width=0.5)
+#plt.grid()
+#plt.title("Standard Normal Distribution", size=20)
+#plt.xlabel('Binary representation of $z$')
+#plt.ylabel('Probability of $z$')
+#plt.show()
+
+
+print("%s seconds" % (time.time() - start_time))
+
+
+# Period Finding
+#z = list(range(N))
+#y = [y**z0 % N for z0 in z]  # y**z (mod N)
+
+#r = z[y[1:].index(1)+1]
+#print(f'r = {r}')
+         
+#plt.plot(z, y)
+#plt.plot(z, y, 'x')
+#plt.show()
